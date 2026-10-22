@@ -284,6 +284,38 @@ describe("signaling over WebSocket", () => {
     await closed(client.ws);
   });
 
+  test("an error from the device reaches the browser", async () => {
+    const client = await connectClient(owner);
+    expect(JSON.parse(await client.inbox.next()).type).toBe("device-metadata");
+
+    client.ws.send(JSON.stringify({ type: "offer", data: { sd: "client-offer" } }));
+    expect(JSON.parse(await device.inbox.next()).type).toBe("offer");
+    // What the firmware sends when the OIDC identity does not match its owner.
+    device.ws.send(JSON.stringify({ error: "google identity mismatch" }));
+    expect(JSON.parse(await client.inbox.next())).toEqual({
+      type: "error",
+      data: "google identity mismatch",
+    });
+
+    client.ws.close();
+    await closed(client.ws);
+  });
+
+  test("a device that never answers is reported, not waited on forever", async () => {
+    const client = await connectClient(owner);
+    expect(JSON.parse(await client.inbox.next()).type).toBe("device-metadata");
+
+    client.ws.send(JSON.stringify({ type: "offer", data: { sd: "client-offer" } }));
+    expect(JSON.parse(await device.inbox.next()).type).toBe("offer");
+    // The firmware drops the offer silently when it cannot verify the token.
+    const msg = JSON.parse(await client.inbox.next(17000));
+    expect(msg.type).toBe("error");
+    expect(msg.data).toContain("no answer");
+
+    client.ws.close();
+    await closed(client.ws);
+  }, 25000);
+
   test("another account can neither see nor reach the device", async () => {
     const { jar } = await login(OTHER);
     expect((await api(`/devices/${DEVICE_ID}`, {}, jar)).status).toBe(404);

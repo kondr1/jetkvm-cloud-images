@@ -1,0 +1,69 @@
+diff --git a/src/webrtc-signaling.ts b/src/webrtc-signaling.ts
+index d52abcb..0d98007 100644
+--- a/src/webrtc-signaling.ts
++++ b/src/webrtc-signaling.ts
+@@ -19,6 +19,9 @@ export interface DeviceConnection {
+   sku: string | null;
+ }
+ 
++// How long the device gets to answer an offer before the browser is told it refused.
++const DEVICE_ANSWER_TIMEOUT_MS = 15000;
++
+ // Maintain the shared state
+ export const activeConnections: Map<string, DeviceConnection> = new Map();
+ export const inFlight: Set<string> = new Set();
+@@ -324,6 +327,15 @@ function setupClientWebSocket(clientWs: WebSocket, deviceId: string, token: stri
+     }),
+   );
+ 
++  // A device that refuses an offer either reports {"error": ...} or, when its OIDC check
++  // fails, stays silent; either way the browser would wait forever without these.
++  let answerTimer: ReturnType<typeof setTimeout> | undefined;
++  const failSession = (reason: string) => {
++    clearTimeout(answerTimer);
++    console.log(`[Device] ${deviceId} refused the session: ${reason}`);
++    clientWs.send(JSON.stringify({ type: "error", data: reason }));
++  };
++
+   // Handle message forwarding from client to device
+   clientWs.on("message", data => {
+     // Handle ping/pong
+@@ -335,6 +347,11 @@ function setupClientWebSocket(clientWs: WebSocket, deviceId: string, token: stri
+       switch (msg.type) {
+         case "offer":
+           console.log(`[Client] Sending offer to device ${deviceId}`);
++          clearTimeout(answerTimer);
++          answerTimer = setTimeout(
++            () => failSession(`no answer within ${DEVICE_ANSWER_TIMEOUT_MS / 1000}s`),
++            DEVICE_ANSWER_TIMEOUT_MS,
++          );
+           deviceWs.send(
+             JSON.stringify({
+               type: "offer",
+@@ -370,6 +387,7 @@ function setupClientWebSocket(clientWs: WebSocket, deviceId: string, token: stri
+ 
+       switch (msg.type) {
+         case "answer":
++          clearTimeout(answerTimer);
+           console.log(`[Device] Sending answer to client for ${deviceId}`);
+           clientWs.send(JSON.stringify({ type: "answer", data: msg.data }));
+           break;
+@@ -378,6 +396,9 @@ function setupClientWebSocket(clientWs: WebSocket, deviceId: string, token: stri
+           console.log(`[Device] Sending ICE candidate to client for ${deviceId}`);
+           clientWs.send(JSON.stringify({ type: "new-ice-candidate", data: msg.data }));
+           break;
++
++        default:
++          if (msg.error) failSession(typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error));
+       }
+     } catch (error) {
+       console.error(`[Device] Error processing message for ${deviceId}:`, error);
+@@ -415,6 +436,8 @@ function setupClientWebSocket(clientWs: WebSocket, deviceId: string, token: stri
+ 
+   // Cleanup function
+   function cleanup() {
++    clearTimeout(answerTimer);
++
+     // Restore original device handlers
+     deviceWs.onmessage = originalHandlers.onmessage;
+     deviceWs.onerror = originalHandlers.onerror;
