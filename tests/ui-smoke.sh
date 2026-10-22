@@ -18,11 +18,11 @@ if grep -q __JETKVM_CLOUD_API__ "$work/index.html"; then fail "placeholder left 
 
 # Every JS file the page references, and the ones those import, must be free of the placeholder,
 # and one of them has to carry the API origin.
-grep -o 'assets/immutable/[^"]*\.js' "$work/index.html" | sort -u > "$work/js"
+grep -oE 'assets/immutable/[A-Za-z0-9._-]+\.js' "$work/index.html" | sort -u > "$work/js"
 [ -s "$work/js" ] || { head -c 2000 "$work/index.html"; fail "index.html references no scripts"; }
 for f in $(cat "$work/js"); do
-  curl -fs "$base/$f" | grep -o 'assets/immutable/[^"]*\.js' || true
-done | sed 's|.*assets/|assets/|' | sort -u >> "$work/js"
+  curl -fs "$base/$f" | grep -oE 'assets/immutable/[A-Za-z0-9._-]+\.js' || true
+done | sort -u >> "$work/js"
 sort -u -o "$work/js" "$work/js"
 echo "checking $(wc -l < "$work/js") scripts"
 found=0

@@ -67,20 +67,22 @@ function parse(msg: Buffer) {
   return { type, attrs, errorCode };
 }
 
-async function exchange(host: string, port: number, request: Buffer) {
+/** A UDP client; coturn ties the nonce to the 5-tuple, so both requests must share the socket. */
+function udpClient(host: string, port: number) {
   const socket = dgram.createSocket("udp4");
-  try {
-    return await new Promise<Buffer>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("TURN server did not answer")), 3000);
-      socket.once("message", msg => {
-        clearTimeout(timer);
-        resolve(msg);
+  return {
+    exchange(request: Buffer) {
+      return new Promise<Buffer>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("TURN server did not answer")), 3000);
+        socket.once("message", msg => {
+          clearTimeout(timer);
+          resolve(msg);
+        });
+        socket.send(request, port, host);
       });
-      socket.send(request, port, host);
-    });
-  } finally {
-    socket.close();
-  }
+    },
+    close: () => socket.close(),
+  };
 }
 
 /** Tries to allocate a UDP relay; resolves to "allocated" or the TURN error code. */
@@ -88,31 +90,33 @@ export async function turnAllocate(turnUrl: string, username: string, password: 
   const m = turnUrl.match(/^turn:([^:?]+):(\d+)/);
   if (!m) throw new Error(`unsupported TURN url ${turnUrl}`);
   const { address } = await lookup(m[1], 4);
-  const port = Number(m[2]);
+  const client = udpClient(address, Number(m[2]));
 
-  // The first, unauthenticated request is rejected with the realm and nonce to sign with.
-  const challenge = parse(await exchange(address, port, allocateRequest([])));
-  if (challenge.type !== ALLOCATE_ERROR || challenge.errorCode !== 401) {
-    throw new Error(`expected a 401 challenge, got type ${challenge.type} code ${challenge.errorCode}`);
-  }
-  const realm = challenge.attrs.get(ATTR.REALM)!;
-  const nonce = challenge.attrs.get(ATTR.NONCE)!;
+  try {
+    // The first, unauthenticated request is rejected with the realm and nonce to sign with.
+    const challenge = parse(await client.exchange(allocateRequest([])));
+    if (challenge.type !== ALLOCATE_ERROR || challenge.errorCode !== 401) {
+      throw new Error(`expected a 401 challenge, got type ${challenge.type} code ${challenge.errorCode}`);
+    }
+    const realm = challenge.attrs.get(ATTR.REALM)!;
+    const nonce = challenge.attrs.get(ATTR.NONCE)!;
 
-  const key = createHash("md5").update(`${username}:${realm.toString()}:${password}`).digest();
-  const answer = parse(
-    await exchange(
-      address,
-      port,
-      allocateRequest(
-        [
-          [ATTR.USERNAME, Buffer.from(username)],
-          [ATTR.REALM, realm],
-          [ATTR.NONCE, nonce],
-        ],
-        key,
+    const key = createHash("md5").update(`${username}:${realm.toString()}:${password}`).digest();
+    const answer = parse(
+      await client.exchange(
+        allocateRequest(
+          [
+            [ATTR.USERNAME, Buffer.from(username)],
+            [ATTR.REALM, realm],
+            [ATTR.NONCE, nonce],
+          ],
+          key,
+        ),
       ),
-    ),
-  );
-  if (answer.type === ALLOCATE_SUCCESS) return "allocated" as const;
-  return answer.errorCode ?? answer.type;
+    );
+    if (answer.type === ALLOCATE_SUCCESS) return "allocated" as const;
+    return answer.errorCode ?? answer.type;
+  } finally {
+    client.close();
+  }
 }
