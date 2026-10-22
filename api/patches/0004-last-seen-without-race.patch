@@ -1,0 +1,21 @@
+diff --git a/src/webrtc-signaling.ts b/src/webrtc-signaling.ts
+index c29f788..d52abcb 100644
+--- a/src/webrtc-signaling.ts
++++ b/src/webrtc-signaling.ts
+@@ -32,12 +32,11 @@ export const iceServers = toICEServers(
+     "stun:stun.cloudflare.com:3478,stun:stun.l.google.com:19302,stun:stun1.l.google.com:5349",
+ );
+ 
+-// Helper function to update device last seen timestamp
++// Helper function to update device last seen timestamp.
++// updateMany is a no-op for a device deleted meanwhile; find-then-update threw P2025 from
++// the socket close handler, an unhandled rejection that took the whole process down.
+ async function updateDeviceLastSeen(id: string) {
+-  const device = await prisma.device.findUnique({ where: { id } });
+-  if (device) {
+-    return prisma.device.update({ where: { id }, data: { lastSeen: new Date() } });
+-  }
++  return prisma.device.updateMany({ where: { id }, data: { lastSeen: new Date() } });
+ }
+ 
+ const wssDevice = new WebSocketServer({ noServer: true });

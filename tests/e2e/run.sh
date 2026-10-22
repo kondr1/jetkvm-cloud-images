@@ -21,6 +21,11 @@ sleep 20
 idle=$(mem)
 
 "${dc[@]}" --profile tests run --rm tests
+if [ -z "$("${dc[@]}" ps -q --status running api)" ]; then
+  echo "api is not running after the tests:"
+  "${dc[@]}" logs --no-color --tail 40 api
+  exit 1
+fi
 loaded=$(mem)
 
 # Migrations must be safe to run on every deploy.

@@ -349,4 +349,11 @@ describe("deregistration", () => {
     const { devices } = await (await api("/devices", {}, owner)).json();
     expect(devices.map((d: { id: string }) => d.id)).not.toContain(DEVICE_ID);
   });
+
+  test("closing the socket of a deleted device does not crash the api", async () => {
+    // Upstream updated lastSeen with find-then-update in the close handler; losing the race
+    // to the delete threw P2025 as an unhandled rejection and node exited.
+    await Bun.sleep(1000);
+    expect((await fetch(`${API}/healthz`)).status).toBe(200);
+  });
 });
