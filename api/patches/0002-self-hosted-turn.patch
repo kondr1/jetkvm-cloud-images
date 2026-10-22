@@ -1,0 +1,44 @@
+diff --git a/src/webrtc.ts b/src/webrtc.ts
+index 1d146de..638c8e6 100644
+--- a/src/webrtc.ts
++++ b/src/webrtc.ts
+@@ -1,5 +1,6 @@
+ import { WebSocket, WebSocketServer } from "ws";
+ import express from "express";
++import * as crypto from "crypto";
+ import * as jose from "jose";
+ import { prisma } from "./db";
+ import { NotFoundError, UnauthorizedError, UnprocessableEntityError } from "./errors";
+@@ -97,6 +98,9 @@ export const CreateSession = async (req: express.Request, res: express.Response)
+   }
+ };
+ 
++// Lifetime of self-hosted TURN credentials, matching the Cloudflare ones below.
++const TURN_CREDENTIAL_TTL = 3600;
++
+ export const CreateIceCredentials = async (
+   req: express.Request,
+   res: express.Response,
+@@ -110,6 +114,22 @@ export const CreateIceCredentials = async (
+   });
+   if (!user) throw new UnauthorizedError();
+ 
++  // Self-hosted coturn with use-auth-secret: short-lived credentials per the TURN REST API draft.
++  if (process.env.TURN_SECRET && process.env.TURN_URLS) {
++    const username = `${Math.floor(Date.now() / 1000) + TURN_CREDENTIAL_TTL}:${user.id}`;
++    const credential = crypto
++      .createHmac("sha1", process.env.TURN_SECRET)
++      .update(username)
++      .digest("base64");
++    const urls = process.env.TURN_URLS.split(",").map(url => url.trim()).filter(Boolean);
++    return res.json({ iceServers: { urls, username, credential } });
++  }
++
++  // Neither coturn nor Cloudflare configured: STUN only, the same servers the device gets.
++  if (!process.env.CLOUDFLARE_TURN_ID) {
++    return res.json({ iceServers: { urls: iceServers } });
++  }
++
+   const resp = await fetch(
+     `https://rtc.live.cloudflare.com/v1/turn/keys/${process.env.CLOUDFLARE_TURN_ID}/credentials/generate`,
+     {

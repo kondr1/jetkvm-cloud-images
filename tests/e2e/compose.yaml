@@ -1,0 +1,95 @@
+# Test stack for api.test.ts. API_IMAGE and MIGRATE_COMMAND pick the image under test:
+#   API_IMAGE=jetkvm-cloud-api:test MIGRATE_COMMAND="bun --bun x prisma migrate deploy" \
+#     docker compose -f tests/e2e/compose.yaml run --rm tests
+name: jetkvm-e2e
+
+x-api-env: &api-env
+  DATABASE_URL: postgres://jetkvm:jetkvm@db:5432/jetkvm
+
+services:
+  db:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_USER: jetkvm
+      POSTGRES_PASSWORD: jetkvm
+      POSTGRES_DB: jetkvm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jetkvm -d jetkvm"]
+      interval: 2s
+      retries: 30
+
+  migrate:
+    image: ${API_IMAGE:?set API_IMAGE}
+    environment: *api-env
+    command: ${MIGRATE_COMMAND:?set MIGRATE_COMMAND}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  mock-oidc:
+    image: oven/bun:1.4.4-slim
+    working_dir: /e2e
+    volumes:
+      - ./:/e2e:ro
+    command: ["bun", "mock-oidc.ts"]
+    environment:
+      ISSUER: http://mock-oidc:9000
+      CLIENT_ID: e2e-client
+      CLIENT_SECRET: e2e-secret
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:9000/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 2s
+      retries: 30
+
+  coturn:
+    image: coturn/coturn:4.18.0
+    command:
+      - --listening-port=3478
+      - --min-port=49160
+      - --max-port=49170
+      - --realm=e2e
+      - --use-auth-secret
+      - --static-auth-secret=e2e-turn-secret
+      - --no-tls
+      - --no-dtls
+      - --no-cli
+      - --log-file=stdout
+
+  api:
+    image: ${API_IMAGE}
+    environment:
+      <<: *api-env
+      API_HOSTNAME: http://api:3000
+      APP_HOSTNAME: http://app.test
+      CORS_ORIGINS: http://app.test
+      COOKIE_SECRET: e2e-cookie-secret
+      GOOGLE_CLIENT_ID: e2e-client
+      GOOGLE_CLIENT_SECRET: e2e-secret
+      OIDC_ISSUER: http://mock-oidc:9000
+      OIDC_JWKS_URL: http://mock-oidc:9000/jwks
+      ALLOWED_IDENTITIES: owner@example.com,other@example.com
+      ICE_SERVERS: stun:coturn:3478
+      TURN_SECRET: e2e-turn-secret
+      TURN_URLS: turn:coturn:3478?transport=udp,turn:coturn:3478?transport=tcp
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mock-oidc:
+        condition: service_healthy
+      coturn:
+        condition: service_started
+
+  tests:
+    image: oven/bun:1.4.4-slim
+    profiles: ["tests"]
+    working_dir: /e2e
+    volumes:
+      - ./:/e2e:ro
+    command: ["bun", "test", "--timeout", "20000"]
+    environment:
+      API: http://api:3000
+      MOCK_OIDC: http://mock-oidc:9000
+      TURN_SECRET: e2e-turn-secret
+      TURN_URLS: turn:coturn:3478?transport=udp,turn:coturn:3478?transport=tcp
+    depends_on:
+      - api

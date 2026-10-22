@@ -1,0 +1,96 @@
+diff --git a/src/auth.ts b/src/auth.ts
+index 96c895d..42e8463 100644
+--- a/src/auth.ts
++++ b/src/auth.ts
+@@ -3,6 +3,10 @@ import { type NextFunction, type Request, type Response } from "express";
+ import * as jose from "jose";
+ import { UnauthorizedError } from "./errors";
+ 
++// Google unless overridden; the e2e tests point these at a mock OIDC provider.
++export const OIDC_ISSUER = process.env.OIDC_ISSUER || "https://accounts.google.com";
++const OIDC_JWKS_URL = process.env.OIDC_JWKS_URL || "https://www.googleapis.com/oauth2/v3/certs";
++
+ const ALLOWED_IDENTITIES = process.env.ALLOWED_IDENTITIES?.split(",")
+     .map((identity) => identity.trim().toLowerCase())
+     .filter(Boolean);
+@@ -22,12 +26,12 @@ export const isIdentityAllowed = (identity?: string | null) => {
+ 
+ export const verifyToken = async (idToken: string) => {
+   const JWKS = jose.createRemoteJWKSet(
+-    new URL("https://www.googleapis.com/oauth2/v3/certs"),
++    new URL(OIDC_JWKS_URL),
+   );
+ 
+   try {
+     const { payload } = await jose.jwtVerify(idToken, JWKS, {
+-      issuer: "https://accounts.google.com",
++      issuer: OIDC_ISSUER,
+       audience: process.env.GOOGLE_CLIENT_ID,
+     });
+ 
+diff --git a/src/devices.ts b/src/devices.ts
+index b6d54d4..c794bfb 100644
+--- a/src/devices.ts
++++ b/src/devices.ts
+@@ -8,7 +8,7 @@ import {
+   UnprocessableEntityError,
+ } from "./errors";
+ import * as crypto from "crypto";
+-import { authenticated } from "./auth";
++import { authenticated, OIDC_ISSUER } from "./auth";
+ import { activeConnections } from "./webrtc-signaling";
+ import { effectiveSku } from "./skus";
+ 
+@@ -32,7 +32,7 @@ export const List = async (req: express.Request, res: express.Response) => {
+   const { iss, sub } = jose.decodeJwt(idToken);
+ 
+   // Authorization server’s identifier for the user
+-  const isGoogle = iss === "https://accounts.google.com";
++  const isGoogle = iss === OIDC_ISSUER;
+   if (isGoogle) {
+     const devices = await prisma.device.findMany({
+       where: { user: { googleId: sub } },
+diff --git a/src/index.ts b/src/index.ts
+index 5d677e9..ed9df3e 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -11,7 +11,7 @@ import * as Webrtc from "./webrtc";
+ import * as Releases from "./releases";
+ 
+ import { HttpError } from "./errors";
+-import { authenticated, bearerToken } from "./auth";
++import { authenticated, bearerToken, OIDC_ISSUER } from "./auth";
+ import { prisma } from "./db";
+ import { baseUrl, bucketName, s3Client } from "./s3";
+ import { createReleaseSyncRunner, scheduleReleaseSync } from "./release-sync";
+@@ -106,7 +106,7 @@ app.get(
+     const { sub, iss, exp, aud, iat, jti, nbf } = jose.decodeJwt(idToken);
+ 
+     let user;
+-    if (iss === "https://accounts.google.com") {
++    if (iss === OIDC_ISSUER) {
+       user = await prisma.user.findUnique({
+         where: { googleId: sub },
+         select: { picture: true, email: true },
+diff --git a/src/oidc.ts b/src/oidc.ts
+index 7908e76..ad3a1fc 100644
+--- a/src/oidc.ts
++++ b/src/oidc.ts
+@@ -2,7 +2,7 @@ import { generators, Issuer } from "openid-client";
+ import express from "express";
+ import { prisma } from "./db";
+ import { BadRequestError, UnauthorizedError } from "./errors";
+-import { isIdentityAllowed } from "./auth";
++import { isIdentityAllowed, OIDC_ISSUER } from "./auth";
+ import * as crypto from "crypto";
+ 
+ const API_HOSTNAME = process.env.API_HOSTNAME;
+@@ -10,7 +10,7 @@ const APP_HOSTNAME = process.env.APP_HOSTNAME;
+ const REDIRECT_URI = `${API_HOSTNAME}/oidc/callback`;
+ 
+ const getGoogleOIDCClient = async () => {
+-  const googleIssuer = await Issuer.discover("https://accounts.google.com");
++  const googleIssuer = await Issuer.discover(OIDC_ISSUER);
+   return new googleIssuer.Client({
+     client_id: process.env.GOOGLE_CLIENT_ID,
+     client_secret: process.env.GOOGLE_CLIENT_SECRET,
