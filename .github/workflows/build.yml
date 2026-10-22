@@ -140,7 +140,19 @@ jobs:
           repository: ${{ env.KVM_REPO }}
           ref: ${{ env.KVM_REF }}
           path: upstream/kvm
-          sparse-checkout: ui
+          # ui/ has symlinks into internal/ (e.g. public/sse.html)
+          sparse-checkout: |
+            ui
+            internal
+
+      - name: Resolve symlinks that point outside ui/
+        run: |
+          find upstream/kvm/ui -path '*/node_modules' -prune -o -type l -print | while read -r link; do
+            target=$(readlink -f "$link")
+            case "$target" in "$PWD/upstream/kvm/ui/"*) continue ;; esac
+            echo "$link -> $target"
+            cp --remove-destination "$target" "$link"
+          done
 
       - uses: docker/setup-buildx-action@v3
 
