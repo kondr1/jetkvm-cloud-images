@@ -167,29 +167,7 @@ jobs:
           cache-to: type=gha,scope=ui,mode=max
 
       - name: Smoke test
-        run: |
-          set -euo pipefail
-          docker run -d --name ui -p 8080:8080 -e JETKVM_CLOUD_API=https://jett.example.com/ jetkvm-cloud-ui:test
-          for i in $(seq 30); do curl -fs localhost:8080/ > index.html && break; sleep 1; done
-
-          if grep -q __JETKVM_CLOUD_API__ index.html; then echo "placeholder left in index.html"; exit 1; fi
-          entry=$(grep -o 'assets/immutable/index-[^"]*\.js' index.html | head -1)
-          curl -fs "localhost:8080/$entry" -o entry.js
-          grep -rq 'https://jett.example.com' entry.js || {
-            # The API origin may live in a lazily loaded chunk instead of the entry.
-            for chunk in $(grep -o 'assets/immutable/[^"]*\.js' entry.js | sort -u); do
-              curl -fs "localhost:8080/$chunk"
-            done | grep -q 'https://jett.example.com'
-          }
-
-          curl -fs localhost:8080/devices/abc | grep -q '<div id="root"'
-          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/assets/immutable/missing.js)" = 404
-          curl -fsI "localhost:8080/$entry" | grep -qi 'cache-control: public, max-age=31536000, immutable'
-
-          docker run --rm -e JETKVM_CLOUD_API=ftp://nope jetkvm-cloud-ui:test && exit 1 || true
-          sleep 35
-          test "$(docker inspect -f '{{.State.Health.Status}}' ui)" = healthy
-          docker image ls jetkvm-cloud-ui:test --format 'image size: {{.Size}}' | tee -a "$GITHUB_STEP_SUMMARY"
+        run: tests/ui-smoke.sh jetkvm-cloud-ui:test
 
       - name: Push
         if: github.event_name != 'pull_request'
