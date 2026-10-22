@@ -51,7 +51,6 @@ services:
       - --use-auth-secret
       - --static-auth-secret=e2e-turn-secret
       - --no-tls
-      - --no-cli
       - --log-file=stdout
 
   api:
