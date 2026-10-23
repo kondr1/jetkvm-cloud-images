@@ -1,0 +1,49 @@
+#!/bin/sh
+# /userdata/init.d/S30tailscale: starts tailscaled (Tailscale with AmneziaWG/QUIC) on the JetKVM.
+# /userdata survives firmware updates, the root filesystem does not, so the symlink that lets
+# the firmware's Tailscale page find `tailscale` on PATH is recreated on every boot.
+DIR=/userdata/tailscale
+PIDFILE=/tmp/tailscaled-loop.pid
+LOGFILE=/tmp/tailscaled.log
+
+wait_network() {
+  i=0
+  while [ $i -lt 60 ] && ! ip route | grep -q '^default'; do sleep 1; i=$((i + 1)); done
+}
+
+tun_flag() {
+  # Kernel TUN lets exit-node routing carry the device's own traffic; without it,
+  # tailscaled falls back to userspace networking (inbound tailnet access only).
+  [ -c /dev/net/tun ] || { modprobe tun 2> /dev/null; mkdir -p /dev/net; mknod /dev/net/tun c 10 200 2> /dev/null; }
+  if [ -c /dev/net/tun ] && (exec 3<> /dev/net/tun) 2> /dev/null; then
+    echo "--tun=tailscale0"
+  else
+    echo "--tun=userspace-networking"
+  fi
+}
+
+start() {
+  ln -sf "$DIR/tailscaled" /usr/bin/tailscale 2> /dev/null || echo "S30tailscale: /usr/bin is read-only, firmware will not see tailscale" >> "$LOGFILE"
+  mkdir -p "$DIR/state"
+  (
+    wait_network
+    while true; do
+      "$DIR/tailscaled" --statedir="$DIR/state" $(tun_flag) >> "$LOGFILE" 2>&1
+      sleep 5
+    done
+  ) &
+  echo $! > "$PIDFILE"
+}
+
+stop() {
+  [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2> /dev/null
+  rm -f "$PIDFILE"
+  pkill -f "$DIR/tailscaled" 2> /dev/null
+}
+
+case "$1" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; sleep 1; start ;;
+  *) echo "usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

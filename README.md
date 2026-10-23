@@ -56,3 +56,17 @@ Bump the refs in `upstream.env`. If a patch no longer applies, CI fails at "Appl
 ## License
 
 GPL-2.0, like the upstream projects.
+
+## Tailscale with AmneziaWG for the JetKVM
+
+The [`tailscale-awg`](.github/workflows/tailscale-awg.yml) workflow builds the
+[Tailscale fork with AmneziaWG/QUIC transports](https://github.com/LiuTangLei/tailscale) (pinned in `upstream.env`)
+for the JetKVM's linux/armv7 as one binary that is both `tailscaled` and `tailscale`, and publishes it as a release
+with an installer. On the device (developer mode shell):
+
+```sh
+wget -qO- https://github.com/kondr1/jetkvm-cloud-images/releases/download/tailscale-awg-v1.104.2-jetkvm/install-jetkvm.sh | sh
+```
+
+It installs into `/userdata/tailscale` (kept across firmware updates) with `/userdata/init.d/S30tailscale`, which
+starts `tailscaled` on boot and links `/usr/bin/tailscale` so the firmware's Tailscale settings page finds it.

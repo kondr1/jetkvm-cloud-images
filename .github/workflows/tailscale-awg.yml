@@ -1,0 +1,67 @@
+name: tailscale-awg
+
+# Tailscale with AmneziaWG/QUIC for the JetKVM (linux/armv7), published as a GitHub release.
+on:
+  push:
+    branches: [main]
+    paths: [upstream.env, tailscale-awg/**, .github/workflows/tailscale-awg.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  armv7:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read upstream pins
+        run: cat upstream.env | grep -v '^#' >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.TAILSCALE_AWG_REPO }}
+          ref: ${{ env.TAILSCALE_AWG_REF }}
+          path: upstream/tailscale
+          # mkversion derives the version from git history.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: upstream/tailscale/go.mod
+          cache-dependency-path: upstream/tailscale/go.sum
+
+      - name: Build tailscaled (with the CLI included) for armv7
+        working-directory: upstream/tailscale
+        run: |
+          GOOS=linux GOARCH=arm GOARM=7 ./build_dist.sh --box --strip -o "$GITHUB_WORKSPACE/out/tailscaled" ./cmd/tailscaled
+          ls -l "$GITHUB_WORKSPACE/out/tailscaled"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Smoke test under qemu (BusyBox userland, like the JetKVM)
+        run: |
+          docker run --rm --platform linux/arm/v7 -v "$PWD/out:/o:ro" busybox:1.37 sh -c '
+            /o/tailscaled --version && ln -s /o/tailscaled /tmp/tailscale && /tmp/tailscale version && /tmp/tailscale awg --help 2>&1 | grep -qi awg'
+
+      - name: Package
+        run: |
+          cp tailscale-awg/S30tailscale out/
+          tar -czf tailscale-awg-linux-armv7.tar.gz -C out tailscaled S30tailscale
+          sha=$(sha256sum tailscale-awg-linux-armv7.tar.gz | cut -d' ' -f1)
+          tag="tailscale-awg-$TAILSCALE_AWG_TAG-jetkvm"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          sed -e "s/@TAG@/$tag/g" -e "s/@SHA256@/$sha/" tailscale-awg/install-jetkvm.sh > install-jetkvm.sh
+          sha256sum tailscale-awg-linux-armv7.tar.gz install-jetkvm.sh > SHA256SUMS
+          cat SHA256SUMS | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Tailscale fork $TAILSCALE_AWG_TAG ($TAILSCALE_AWG_REPO@${TAILSCALE_AWG_REF::7}) for the JetKVM (linux/armv7). Install on the device: wget -qO- https://github.com/${{ github.repository }}/releases/download/$TAG/install-jetkvm.sh | sh"
+          gh release view "$TAG" > /dev/null 2>&1 && gh release delete "$TAG" --yes --cleanup-tag
+          gh release create "$TAG" --title "$TAG" --notes "$notes" --target "$GITHUB_SHA" \
+            tailscale-awg-linux-armv7.tar.gz install-jetkvm.sh SHA256SUMS
